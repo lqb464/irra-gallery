@@ -182,6 +182,10 @@ class IRRA(nn.Module):
                     gallery_losses['confidence'] * self.args.gallery_confidence_weight
                 ),
                 'gallery_candidate_count': gallery_losses['candidate_count'],
+                'gallery_delta_mean': gallery_losses['delta_mean'],
+                'gallery_delta_std': gallery_losses['delta_std'],
+                'gallery_delta_min': gallery_losses['delta_min'],
+                'gallery_delta_max': gallery_losses['delta_max'],
             })
 
         return ret

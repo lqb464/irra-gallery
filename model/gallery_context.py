@@ -153,8 +153,6 @@ class GalleryContext(nn.Module):
         self,
         query_scores: Tensor,
         gallery_features: Tensor,
-        gallery_pids: Tensor,
-        target_pid: Tensor,
         gallery_similarity: Tensor,
     ) -> Tensor:
         gallery_count = gallery_features.shape[0]
@@ -165,8 +163,7 @@ class GalleryContext(nn.Module):
         neighbors = gallery_similarity[seeds].detach().topk(
             neighbor_count, dim=-1
         ).indices.reshape(-1)
-        positives = torch.nonzero(gallery_pids == target_pid, as_tuple=False).flatten()
-        return torch.unique(torch.cat([seeds, neighbors, positives], dim=0))
+        return torch.unique(torch.cat([seeds, neighbors], dim=0))
 
     @staticmethod
     def _focal_loss(logits: Tensor, targets: Tensor, gamma: float, alpha: float) -> Tensor:
@@ -184,7 +181,7 @@ class GalleryContext(nn.Module):
         pids: Tensor,
         image_ids: Tensor,
     ) -> Dict[str, Tensor]:
-        """Train on the minibatch gallery and its identity-labelled positives."""
+        """Train on candidates selected without identity labels; use PIDs only for loss targets."""
         if image_ids is None:
             image_ids = torch.arange(image_features.shape[0], device=image_features.device)
         _, inverse = torch.unique(image_ids, sorted=True, return_inverse=True)
@@ -203,12 +200,11 @@ class GalleryContext(nn.Module):
         ranking_losses: List[Tensor] = []
         confidence_losses: List[Tensor] = []
         candidate_counts: List[Tensor] = []
+        delta_values: List[Tensor] = []
         for row in range(text_features.shape[0]):
             candidate_ids = self._expand_training_candidates(
                 base_scores[row],
                 gallery_features,
-                gallery_pids,
-                pids[row],
                 gallery_similarity,
             )
             candidate_features = gallery_features[candidate_ids]
@@ -218,6 +214,8 @@ class GalleryContext(nn.Module):
             match_logits, delta = self._contextual_scores(
                 text_features[row], candidate_features
             )
+            # Logging-only statistics; detach so these values never affect gradients.
+            delta_values.append(delta.detach().float())
             sign = -1.0 if self.score_mode == "lower" else 1.0
             adjusted_scores = candidate_scores + (
                 sign * self.score_adjustment_weight * delta
@@ -243,10 +241,15 @@ class GalleryContext(nn.Module):
             )
             candidate_counts.append(torch.tensor(float(candidate_ids.numel()), device=pids.device))
 
+        all_deltas = torch.cat(delta_values)
         return {
             "rank": torch.stack(ranking_losses).mean(),
             "confidence": torch.stack(confidence_losses).mean(),
             "candidate_count": torch.stack(candidate_counts).mean(),
+            "delta_mean": all_deltas.mean(),
+            "delta_std": all_deltas.std(unbiased=False),
+            "delta_min": all_deltas.min(),
+            "delta_max": all_deltas.max(),
         }
 
     @torch.no_grad()

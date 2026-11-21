@@ -34,6 +34,13 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
         "itc_loss": AverageMeter(),
         "id_loss": AverageMeter(),
         "mlm_loss": AverageMeter(),
+        "gallery_rank_loss": AverageMeter(),
+        "gallery_confidence_loss": AverageMeter(),
+        "gallery_candidate_count": AverageMeter(),
+        "gallery_delta_mean": AverageMeter(),
+        "gallery_delta_std": AverageMeter(),
+        "gallery_delta_min": AverageMeter(),
+        "gallery_delta_max": AverageMeter(),
         "img_acc": AverageMeter(),
         "txt_acc": AverageMeter(),
         "mlm_acc": AverageMeter()
@@ -62,6 +69,13 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
             meters['itc_loss'].update(meter_scalar(ret.get('itc_loss', 0)), batch_size)
             meters['id_loss'].update(meter_scalar(ret.get('id_loss', 0)), batch_size)
             meters['mlm_loss'].update(meter_scalar(ret.get('mlm_loss', 0)), batch_size)
+            for key in (
+                'gallery_rank_loss', 'gallery_confidence_loss',
+                'gallery_candidate_count', 'gallery_delta_mean',
+                'gallery_delta_std', 'gallery_delta_min', 'gallery_delta_max',
+            ):
+                if key in ret:
+                    meters[key].update(meter_scalar(ret[key]), batch_size)
 
             meters['img_acc'].update(meter_scalar(ret.get('img_acc', 0)), batch_size)
             meters['txt_acc'].update(meter_scalar(ret.get('txt_acc', 0)), batch_size)
