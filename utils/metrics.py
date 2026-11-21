@@ -81,15 +81,29 @@ class Evaluator():
 
         similarity = qfeats @ gfeats.t()
 
-        t2i_cmc, t2i_mAP, t2i_mINP, _ = rank(similarity=similarity, q_pids=qids, g_pids=gids, max_rank=10, get_mAP=True)
-        t2i_cmc, t2i_mAP, t2i_mINP = t2i_cmc.numpy(), t2i_mAP.numpy(), t2i_mINP.numpy()
         table = PrettyTable(["task", "R1", "R5", "R10", "mAP", "mINP"])
-        table.add_row(['t2i', t2i_cmc[0], t2i_cmc[4], t2i_cmc[9], t2i_mAP, t2i_mINP])
+
+        def add_metrics(name, scores, query_ids, gallery_ids):
+            cmc, mean_ap, mean_inp, _ = rank(
+                similarity=scores,
+                q_pids=query_ids,
+                g_pids=gallery_ids,
+                max_rank=10,
+                get_mAP=True,
+            )
+            cmc = cmc.detach().cpu().numpy()
+            mean_ap = float(mean_ap.detach().cpu())
+            mean_inp = float(mean_inp.detach().cpu())
+            table.add_row([name, cmc[0], cmc[4], cmc[9], mean_ap, mean_inp])
+            return cmc[0]
+
+        top1 = add_metrics("t2i-base", similarity, qids, gids)
+        if getattr(model, "gallery_context_enabled", False):
+            gallery_scores = model.rerank_similarity(qfeats, gfeats, similarity)
+            top1 = add_metrics("t2i-gallery", gallery_scores, qids, gids)
 
         if i2t_metric:
-            i2t_cmc, i2t_mAP, i2t_mINP, _ = rank(similarity=similarity.t(), q_pids=gids, g_pids=qids, max_rank=10, get_mAP=True)
-            i2t_cmc, i2t_mAP, i2t_mINP = i2t_cmc.numpy(), i2t_mAP.numpy(), i2t_mINP.numpy()
-            table.add_row(['i2t', i2t_cmc[0], i2t_cmc[4], i2t_cmc[9], i2t_mAP, i2t_mINP])
+            add_metrics("i2t-base", similarity.t(), gids, qids)
         # table.float_format = '.4'
         table.custom_format["R1"] = lambda f, v: f"{v:.3f}"
         table.custom_format["R5"] = lambda f, v: f"{v:.3f}"
@@ -98,4 +112,4 @@ class Evaluator():
         table.custom_format["mINP"] = lambda f, v: f"{v:.3f}"
         self.logger.info('\n' + str(table))
         
-        return t2i_cmc[0]
+        return top1

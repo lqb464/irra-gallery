@@ -1,5 +1,6 @@
 from model import objectives
 from .clip_model import Transformer, QuickGELU, LayerNorm, build_CLIP_from_openai_pretrained, convert_weights
+from .gallery_context import GalleryContext
 import numpy as np
 import torch
 import torch.nn as nn
@@ -17,6 +18,21 @@ class IRRA(nn.Module):
         self.embed_dim = base_cfg['embed_dim']
 
         self.logit_scale = torch.ones([]) * (1 / args.temperature) 
+
+        self.gallery_context_enabled = not getattr(args, 'disable_gallery_context', False)
+        if self.gallery_context_enabled:
+            self.gallery_context = GalleryContext(
+                embed_dim=self.embed_dim,
+                candidate_topk=args.candidate_topk,
+                neighbor_k=args.neighbor_k,
+                graph_topk=args.graph_topk,
+                memory_layers=args.memory_layers,
+                score_mode=args.score_mode,
+                score_adjustment_weight=args.score_adjustment_weight,
+                margin=args.gallery_margin,
+                focal_gamma=args.focal_gamma,
+                focal_alpha=args.focal_alpha,
+            )
 
         if 'id' in args.loss_names:
             self.classifier = nn.Linear(self.embed_dim, self.num_classes)
@@ -87,6 +103,18 @@ class IRRA(nn.Module):
         x = self.base_model.encode_text(text)
         return x[torch.arange(x.shape[0]), text.argmax(dim=-1)].float()
 
+    def rerank_similarity(self, text_features, image_features, base_similarity=None):
+        if not self.gallery_context_enabled:
+            return base_similarity
+        if base_similarity is None:
+            base_similarity = (
+                nn.functional.normalize(text_features.float(), dim=-1)
+                @ nn.functional.normalize(image_features.float(), dim=-1).t()
+            )
+        return self.gallery_context.rerank_scores(
+            text_features, image_features, base_similarity
+        )
+
     def forward(self, batch):
         ret = dict()
 
@@ -141,6 +169,21 @@ class IRRA(nn.Module):
             acc = (pred == mlm_labels).float().mean()
             ret.update({'mlm_acc': acc})
 
+        if self.gallery_context_enabled:
+            gallery_losses = self.gallery_context.training_losses(
+                text_features=t_feats,
+                image_features=i_feats,
+                pids=batch['pids'],
+                image_ids=batch.get('image_ids'),
+            )
+            ret.update({
+                'gallery_rank_loss': gallery_losses['rank'] * self.args.gallery_loss_weight,
+                'gallery_confidence_loss': (
+                    gallery_losses['confidence'] * self.args.gallery_confidence_weight
+                ),
+                'gallery_candidate_count': gallery_losses['candidate_count'],
+            })
+
         return ret
 
 
@@ -148,4 +191,6 @@ def build_model(args, num_classes=11003):
     model = IRRA(args, num_classes)
     # covert model to fp16
     convert_weights(model)
+    if model.gallery_context_enabled:
+        model.gallery_context.float()
     return model

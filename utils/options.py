@@ -26,6 +26,21 @@ def get_args():
     parser.add_argument("--lr_factor", type=float, default=5.0, help="lr factor for random init self implement module")
     parser.add_argument("--MLM", default=False, action='store_true', help="whether to use Mask Language Modeling dataset")
 
+    ######################## gallery-context experiment ########################
+    parser.add_argument("--disable_gallery_context", action="store_true",
+                        help="disable the added gallery-context branch and its losses")
+    parser.add_argument("--candidate_topk", type=int, default=8)
+    parser.add_argument("--neighbor_k", type=int, default=4)
+    parser.add_argument("--graph_topk", type=int, default=4)
+    parser.add_argument("--memory_layers", type=int, default=1)
+    parser.add_argument("--score_mode", choices=["lower", "raise"], default="lower")
+    parser.add_argument("--score_adjustment_weight", type=float, default=1.0)
+    parser.add_argument("--gallery_loss_weight", type=float, default=1.0)
+    parser.add_argument("--gallery_confidence_weight", type=float, default=1.0)
+    parser.add_argument("--gallery_margin", type=float, default=0.2)
+    parser.add_argument("--focal_gamma", type=float, default=2.0)
+    parser.add_argument("--focal_alpha", type=float, default=0.25)
+
     ######################## loss settings ########################
     parser.add_argument("--loss_names", default='sdm+id+mlm', help="which loss to use ['mlm', 'cmpm', 'id', 'itc', 'sdm']")
     parser.add_argument("--mlm_loss_weight", type=float, default=1.0, help="mlm loss weight")
