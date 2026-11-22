@@ -155,7 +155,7 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
                 info_str = f"Epoch[{epoch}] Iteration[{n_iter + 1}/{len(train_loader)}]"
                 # log loss and acc info
                 for k, v in meters.items():
-                    if v.avg > 0:
+                    if v.count > 0 and (v.avg > 0 or k.startswith("gallery_delta_")):
                         info_str += f", {k}: {v.avg:.4f}"
                 info_str += f", Base Lr: {scheduler.get_lr()[0]:.2e}"
                 logger.info(info_str)
@@ -163,7 +163,7 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
         tb_writer.add_scalar('lr', scheduler.get_lr()[0], epoch)
         tb_writer.add_scalar('temperature', meter_scalar(ret['temperature']), epoch)
         for k, v in meters.items():
-            if v.avg > 0:
+            if v.count > 0 and (v.avg > 0 or k.startswith("gallery_delta_")):
                 tb_writer.add_scalar(k, v.avg, epoch)
 
 

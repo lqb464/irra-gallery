@@ -33,7 +33,6 @@ def get_args():
     parser.add_argument("--neighbor_k", type=int, default=4)
     parser.add_argument("--graph_topk", type=int, default=4)
     parser.add_argument("--memory_layers", type=int, default=1)
-    parser.add_argument("--score_mode", choices=["lower", "raise"], default="lower")
     parser.add_argument("--score_adjustment_weight", type=float, default=1.0)
     parser.add_argument("--gallery_loss_weight", type=float, default=1.0)
     parser.add_argument("--gallery_confidence_weight", type=float, default=1.0)

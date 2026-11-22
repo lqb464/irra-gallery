@@ -27,7 +27,6 @@ class IRRA(nn.Module):
                 neighbor_k=args.neighbor_k,
                 graph_topk=args.graph_topk,
                 memory_layers=args.memory_layers,
-                score_mode=args.score_mode,
                 score_adjustment_weight=args.score_adjustment_weight,
                 margin=args.gallery_margin,
                 focal_gamma=args.focal_gamma,

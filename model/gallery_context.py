@@ -20,15 +20,12 @@ class GalleryContext(nn.Module):
         neighbor_k: int = 4,
         graph_topk: int = 4,
         memory_layers: int = 1,
-        score_mode: str = "lower",
         score_adjustment_weight: float = 1.0,
         margin: float = 0.2,
         focal_gamma: float = 2.0,
         focal_alpha: float = 0.25,
     ) -> None:
         super().__init__()
-        if score_mode not in {"lower", "raise"}:
-            raise ValueError("score_mode must be 'lower' or 'raise'")
         if candidate_topk < 1 or neighbor_k < 0 or graph_topk < 0 or memory_layers < 1:
             raise ValueError(
                 "candidate_topk and memory_layers must be positive; neighbour counts cannot be negative"
@@ -41,7 +38,6 @@ class GalleryContext(nn.Module):
         self.candidate_topk = candidate_topk
         self.neighbor_k = neighbor_k
         self.graph_topk = graph_topk
-        self.score_mode = score_mode
         self.score_adjustment_weight = score_adjustment_weight
         self.margin = margin
         self.focal_gamma = focal_gamma
@@ -79,7 +75,8 @@ class GalleryContext(nn.Module):
         nn.init.normal_(self.graph_projection.weight, std=0.01)
         nn.init.normal_(self.score_predictor[0].weight, std=0.01)
         nn.init.normal_(self.score_predictor[-1].weight, std=0.01)
-        nn.init.constant_(self.score_predictor[-1].bias, -4.0)
+        # Start near zero so the learned adjustment begins close to the base score.
+        nn.init.zeros_(self.score_predictor[-1].bias)
 
     @staticmethod
     def _normalize(features: Tensor) -> Tensor:
@@ -146,7 +143,8 @@ class GalleryContext(nn.Module):
             ],
             dim=-1,
         )
-        delta = F.softplus(self.score_predictor(score_input).squeeze(-1).float())
+        # Signed residual: the ranking objective learns whether to raise or lower each score.
+        delta = self.score_predictor(score_input).squeeze(-1).float()
         return match_logits, delta
 
     def _expand_training_candidates(
@@ -216,10 +214,7 @@ class GalleryContext(nn.Module):
             )
             # Logging-only statistics; detach so these values never affect gradients.
             delta_values.append(delta.detach().float())
-            sign = -1.0 if self.score_mode == "lower" else 1.0
-            adjusted_scores = candidate_scores + (
-                sign * self.score_adjustment_weight * delta
-            )
+            adjusted_scores = candidate_scores + self.score_adjustment_weight * delta
 
             positive_scores = adjusted_scores[targets > 0.5]
             negative_scores = adjusted_scores[targets <= 0.5]
@@ -278,9 +273,8 @@ class GalleryContext(nn.Module):
             _, delta = self._contextual_scores(
                 text_features[row], gallery_features[candidate_ids]
             )
-            sign = -1.0 if self.score_mode == "lower" else 1.0
             final_similarity[row, candidate_ids] = (
                 base_similarity[row, candidate_ids]
-                + sign * self.score_adjustment_weight * delta
+                + self.score_adjustment_weight * delta
             )
         return final_similarity
