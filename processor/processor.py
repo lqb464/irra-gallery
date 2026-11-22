@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 import torch
 from utils.meter import AverageMeter
@@ -14,6 +15,25 @@ def meter_scalar(value):
     return value
 
 
+def gradient_group_norm(loss, parameters):
+    """Measure a loss's gradient norm without accumulating parameter .grad values."""
+    parameters = [parameter for parameter in parameters if parameter.requires_grad]
+    if not parameters or not loss.requires_grad:
+        return 0.0
+
+    gradients = torch.autograd.grad(
+        loss,
+        parameters,
+        retain_graph=True,
+        allow_unused=True,
+    )
+    squared_norm = 0.0
+    for gradient in gradients:
+        if gradient is not None:
+            squared_norm += gradient.detach().float().pow(2).sum().item()
+    return squared_norm ** 0.5
+
+
 def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
              scheduler, checkpointer):
 
@@ -27,6 +47,16 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
 
     logger = logging.getLogger("IRRA.train")
     logger.info('start training')
+
+    gradient_logger = logging.getLogger("IRRA.gallery_gradients")
+    if get_rank() == 0 and not gradient_logger.handlers:
+        gradient_logger.setLevel(logging.INFO)
+        gradient_handler = logging.FileHandler(
+            os.path.join(args.output_dir, "gallery_gradients.log"), mode="a"
+        )
+        gradient_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+        gradient_logger.addHandler(gradient_handler)
+        gradient_logger.propagate = False
 
     meters = {
         "loss": AverageMeter(),
@@ -76,6 +106,41 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
             ):
                 if key in ret:
                     meters[key].update(meter_scalar(ret[key]), batch_size)
+
+            grad_log_period = max(1, getattr(args, "gallery_grad_log_period", log_period))
+            if (
+                get_rank() == 0
+                and "gallery_rank_loss" in ret
+                and (n_iter + 1) % grad_log_period == 0
+            ):
+                raw_model = model.module if hasattr(model, "module") else model
+                named_parameters = list(raw_model.named_parameters())
+                gallery_parameters = [
+                    parameter for name, parameter in named_parameters
+                    if name.startswith("gallery_context.")
+                ]
+                shared_parameters = [
+                    parameter for name, parameter in named_parameters
+                    if name.startswith("base_model.")
+                ]
+                base_loss = sum(
+                    value for name, value in ret.items()
+                    if "loss" in name and not name.startswith("gallery_")
+                )
+                losses_to_measure = [("base_loss", base_loss)] + [
+                    (name, ret[name])
+                    for name in ("gallery_rank_loss", "gallery_confidence_loss")
+                    if name in ret
+                ]
+                for loss_name, loss in losses_to_measure:
+                    gallery_norm = gradient_group_norm(loss, gallery_parameters)
+                    shared_norm = gradient_group_norm(loss, shared_parameters)
+                    gradient_logger.info(
+                        "epoch=%d iteration=%d loss=%s value=%.8g "
+                        "gallery_grad_norm=%.8g shared_encoder_grad_norm=%.8g",
+                        epoch, n_iter + 1, loss_name, meter_scalar(loss),
+                        gallery_norm, shared_norm,
+                    )
 
             meters['img_acc'].update(meter_scalar(ret.get('img_acc', 0)), batch_size)
             meters['txt_acc'].update(meter_scalar(ret.get('txt_acc', 0)), batch_size)
