@@ -75,9 +75,11 @@ Internet for the BPE tokenizer and CLIP weight downloads.
 
 ## Train for 10 epochs
 
-The initial configuration uses batch size 32, 8 identities per batch, and 4
-instances per identity. The projection dimension is 128 and the hard-set
-contrastive temperature is 0.07.
+This run follows IRRA's published training recipe: random sampling, batch size
+64, Adam at learning rate `1e-5`, image augmentation, and the `sdm+mlm+id`
+losses. It runs for 10 epochs as a smoke-scale experiment while keeping the
+learning-rate schedule on IRRA's 60-epoch horizon. The added projection
+dimension is 128 and its contrastive temperature is 0.07.
 
 ```bash
 python train.py \
@@ -85,13 +87,17 @@ python train.py \
   --dataset_name RSTPReid \
   --root_dir /path/to/tbps-benchmark/benchmark \
   --num_epoch 10 \
-  --batch_size 32 \
-  --sampler identity \
-  --num_instance 4 \
-  --num_workers 4 \
+  --lr-total-epochs 60 \
+  --optimizer Adam \
+  --lr 1e-5 \
+  --lr_factor 5 \
+  --weight_decay 4e-5 \
+  --batch_size 64 \
+  --sampler random \
+  --num_workers 8 \
   --img_aug \
   --MLM \
-  --loss_names sdm+id+mlm \
+  --loss_names sdm+mlm+id \
   --candidate_topk 8 \
   --hard_projection_dim 128 \
   --hard_temperature 0.07 \
@@ -133,13 +139,17 @@ uses the dataset path from the supplied notebook.
   --root_dir /kaggle/input/datasets/hoanggv/tbps-benchmark/benchmark \
   --output_dir /kaggle/working/irra-hard-outputs \
   --num_epoch 10 \
-  --batch_size 32 \
-  --sampler identity \
-  --num_instance 4 \
-  --num_workers 4 \
+  --lr-total-epochs 60 \
+  --optimizer Adam \
+  --lr 1e-5 \
+  --lr_factor 5 \
+  --weight_decay 4e-5 \
+  --batch_size 64 \
+  --sampler random \
+  --num_workers 8 \
   --img_aug \
   --MLM \
-  --loss_names sdm+id+mlm \
+  --loss_names sdm+mlm+id \
   --candidate_topk 8 \
   --hard_projection_dim 128 \
   --hard_temperature 0.07 \
