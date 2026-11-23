@@ -499,7 +499,9 @@ def convert_weights(model: nn.Module):
         for name in ["text_projection", "proj", "mcq_proj"]:
             if hasattr(l, name):
                 attr = getattr(l, name)
-                if attr is not None:
+                # The hard-candidate branch also has projection modules with
+                # these names. Only convert CLIP's tensor-valued projections.
+                if torch.is_tensor(attr):
                     attr.data = attr.data.half()
 
     model.apply(_convert_weights_to_fp16)
