@@ -17,8 +17,8 @@ def build_optimizer(args, model):
         if "cross" in key:
             # use large learning rate for random initialized cross modal module
             lr =  args.lr * args.lr_factor # default 5.0
-        if "gallery_context" in key:
-            # New randomly initialized gallery module uses the configured init-module LR.
+        if "hard_candidate_branch" in key:
+            # The hard-candidate projection heads are randomly initialized.
             lr = args.lr * args.lr_factor
         if "bias" in key:
             lr = args.lr * args.bias_lr_factor
@@ -66,3 +66,4 @@ def build_lr_scheduler(args, optimizer):
         target_lr=args.target_lr,
         power=args.power,
     )
+

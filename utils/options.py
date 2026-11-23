@@ -10,7 +10,7 @@ def get_args():
     parser.add_argument("--log_period", default=100)
     parser.add_argument("--eval_period", default=1, type=int)
     parser.add_argument("--eval-after-epoch", type=int, default=0)
-    parser.add_argument("--val_dataset", default="test") # use val set when evaluate, if test use test set
+    parser.add_argument("--val_dataset", default="val") # select checkpoints on validation data
     parser.add_argument("--resume", default=False, action='store_true')
     parser.add_argument("--resume_ckpt_file", default="", help='resume from ...')
 
@@ -26,19 +26,19 @@ def get_args():
     parser.add_argument("--lr_factor", type=float, default=5.0, help="lr factor for random init self implement module")
     parser.add_argument("--MLM", default=False, action='store_true', help="whether to use Mask Language Modeling dataset")
 
-    ######################## gallery-context experiment ########################
+    ######################## gallery context settings ########################
     parser.add_argument("--disable_gallery_context", action="store_true",
-                        help="disable the added gallery-context branch and its losses")
-    parser.add_argument("--candidate_topk", type=int, default=8)
-    parser.add_argument("--neighbor_k", type=int, default=4)
-    parser.add_argument("--graph_topk", type=int, default=4)
-    parser.add_argument("--memory_layers", type=int, default=1)
-    parser.add_argument("--score_adjustment_weight", type=float, default=1.0)
-    parser.add_argument("--gallery_loss_weight", type=float, default=1.0)
-    parser.add_argument("--gallery_confidence_weight", type=float, default=1.0)
-    parser.add_argument("--gallery_margin", type=float, default=0.2)
-    parser.add_argument("--focal_gamma", type=float, default=2.0)
-    parser.add_argument("--focal_alpha", type=float, default=0.25)
+                        help="disable hard-candidate reranking and train only the IRRA baseline")
+    parser.add_argument("--candidate_topk", type=int, default=8,
+                        help="number of base-IRRA top candidates used for hard-set contrastive learning")
+    parser.add_argument("--hard_projection_dim", type=int, default=128,
+                        help="dimension of the learned hard-candidate projection space")
+    parser.add_argument("--hard_temperature", type=float, default=0.07,
+                        help="temperature for supervised contrastive learning on hard sets")
+    parser.add_argument("--hard_loss_weight", type=float, default=1.0,
+                        help="weight of the second, hard-candidate contrastive objective")
+    parser.add_argument("--hard_score_weight", type=float, default=0.5,
+                        help="weight of projected similarity when reranking top candidates")
 
     ######################## loss settings ########################
     parser.add_argument("--loss_names", default='sdm+id+mlm', help="which loss to use ['mlm', 'cmpm', 'id', 'itc', 'sdm']")
@@ -66,7 +66,7 @@ def get_args():
     ######################## scheduler ########################
     parser.add_argument("--num_epoch", type=int, default=60)
     parser.add_argument("--lr-total-epochs", type=int, default=None,
-                        help="total epoch horizon used by the learning-rate scheduler")
+                        help="learning-rate schedule horizon, independent of the stopping epoch")
     parser.add_argument("--milestones", type=int, nargs='+', default=(20, 50))
     parser.add_argument("--gamma", type=float, default=0.1)
     parser.add_argument("--warmup_factor", type=float, default=0.1)

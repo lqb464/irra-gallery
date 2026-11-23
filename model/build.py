@@ -1,6 +1,6 @@
 from model import objectives
 from .clip_model import Transformer, QuickGELU, LayerNorm, build_CLIP_from_openai_pretrained, convert_weights
-from .gallery_context import GalleryContext
+from .hard_candidate import HardCandidateContrastive
 import numpy as np
 import torch
 import torch.nn as nn
@@ -19,18 +19,14 @@ class IRRA(nn.Module):
 
         self.logit_scale = torch.ones([]) * (1 / args.temperature) 
 
-        self.gallery_context_enabled = not getattr(args, 'disable_gallery_context', False)
-        if self.gallery_context_enabled:
-            self.gallery_context = GalleryContext(
+        self.hard_candidate_enabled = not getattr(args, 'disable_gallery_context', False)
+        if self.hard_candidate_enabled:
+            self.hard_candidate_branch = HardCandidateContrastive(
                 embed_dim=self.embed_dim,
                 candidate_topk=args.candidate_topk,
-                neighbor_k=args.neighbor_k,
-                graph_topk=args.graph_topk,
-                memory_layers=args.memory_layers,
-                score_adjustment_weight=args.score_adjustment_weight,
-                margin=args.gallery_margin,
-                focal_gamma=args.focal_gamma,
-                focal_alpha=args.focal_alpha,
+                projection_dim=args.hard_projection_dim,
+                temperature=args.hard_temperature,
+                score_weight=args.hard_score_weight,
             )
 
         if 'id' in args.loss_names:
@@ -103,14 +99,14 @@ class IRRA(nn.Module):
         return x[torch.arange(x.shape[0]), text.argmax(dim=-1)].float()
 
     def rerank_similarity(self, text_features, image_features, base_similarity=None):
-        if not self.gallery_context_enabled:
+        if not self.hard_candidate_enabled:
             return base_similarity
         if base_similarity is None:
             base_similarity = (
                 nn.functional.normalize(text_features.float(), dim=-1)
                 @ nn.functional.normalize(image_features.float(), dim=-1).t()
             )
-        return self.gallery_context.rerank_scores(
+        return self.hard_candidate_branch.rerank_scores(
             text_features, image_features, base_similarity
         )
 
@@ -168,23 +164,18 @@ class IRRA(nn.Module):
             acc = (pred == mlm_labels).float().mean()
             ret.update({'mlm_acc': acc})
 
-        if self.gallery_context_enabled:
-            gallery_losses = self.gallery_context.training_losses(
+        if self.hard_candidate_enabled:
+            gallery_losses = self.hard_candidate_branch.training_losses(
                 text_features=t_feats,
                 image_features=i_feats,
                 pids=batch['pids'],
                 image_ids=batch.get('image_ids'),
             )
             ret.update({
-                'gallery_rank_loss': gallery_losses['rank'] * self.args.gallery_loss_weight,
-                'gallery_confidence_loss': (
-                    gallery_losses['confidence'] * self.args.gallery_confidence_weight
+                'hard_contrastive_loss': (
+                    gallery_losses['contrastive'] * self.args.hard_loss_weight
                 ),
                 'gallery_candidate_count': gallery_losses['candidate_count'],
-                'gallery_delta_mean': gallery_losses['delta_mean'],
-                'gallery_delta_std': gallery_losses['delta_std'],
-                'gallery_delta_min': gallery_losses['delta_min'],
-                'gallery_delta_max': gallery_losses['delta_max'],
             })
 
         return ret
@@ -194,6 +185,5 @@ def build_model(args, num_classes=11003):
     model = IRRA(args, num_classes)
     # covert model to fp16
     convert_weights(model)
-    if model.gallery_context_enabled:
-        model.gallery_context.float()
     return model
+

@@ -1,135 +1,168 @@
-# Cross-Modal Implicit Relation Reasoning and Aligning for Text-to-Image Person Retrieval
-[![GitHub](https://img.shields.io/badge/license-MIT-green)](https://github.com/anosorae/IRRA/blob/main/LICENSE) [![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/cross-modal-implicit-relation-reasoning-and/nlp-based-person-retrival-on-cuhk-pedes)](https://paperswithcode.com/sota/nlp-based-person-retrival-on-cuhk-pedes?p=cross-modal-implicit-relation-reasoning-and)
+# IRRA + hard-candidate contrastive branch
 
-Official PyTorch implementation of the paper Cross-Modal Implicit Relation Reasoning and Aligning for Text-to-Image Person Retrieval. (CVPR 2023) [arXiv](https://arxiv.org/abs/2303.12501)
+This experiment keeps IRRA as the base text-to-image retriever and adds a
+trainable second contrastive objective over the small set of candidates that
+IRRA considers hardest for each query. It is intended as a first 10-epoch
+feasibility run on RSTPReid.
 
-## Updates
-- (3/23/2023) Add arXiv link for our paper.
-- (3/18/2023) Add download links of trained models and logs.
-- (3/17/2023) Ensure the reproducibility of our code.
-- (3/13/2023) Code released!
+## Architecture
 
-## Highlights
+IRRA uses its CLS image feature and EOT text feature to retrieve the initial
+top-K images. For each training query, the branch then:
 
-The goal of this work is to enhance global text-to-image person retrieval performance, without requiring any additional supervision and inference cost. To achieve this, we utilize the full CLIP model as our feature extraction backbone. Additionally, we propose a novel cross-modal matching loss (SDM) and an Implicit Relation Reasoning module to mine fine-grained image-text relationships, enabling IRRA to learn more discriminative global image-text representations.
+1. Uses the top-K images from the current minibatch as hard candidates.
+2. Checks whether the top-K already contains an image with the query PID. If
+   not, it appends exactly one positive image from the minibatch. If a positive
+   is already in top-K, it adds no extra images.
+3. Maps the query and candidate CLS features into a lower-dimensional learned
+   space with separate text and image projection heads.
+4. Applies supervised contrastive loss to the query and the selected images.
+   Features with the same identity are pulled together; features with different
+   identities are pushed apart. This is the second contrastive objective, in
+   addition to IRRA's original objectives.
 
-![](images/architecture.png)
+The projection is learned jointly with IRRA. It is not a fixed PCA transform:
+PCA preserves directions with high variance but does not know which pairs share
+an identity. The identity-supervised contrastive objective teaches the
+projection which distinctions matter for retrieval.
 
+The total loss is
 
-## Usage
-### Requirements
-we use single RTX3090 24G GPU for training and evaluation. 
+\[
+L = L_{SDM} + L_{ID} + L_{MLM} + \lambda_h L_{hard\_contrastive}.
+\]
+
+At inference, IRRA ranks the complete gallery and selects top-K candidates. The
+projection branch adjusts the scores of those candidates using query-image
+similarity in the learned space. Images outside top-K keep their original IRRA
+scores. No identity labels are used at inference. Only top-K scores are
+adjusted; the rest of the gallery remains eligible with its original IRRA
+scores, but the branch does not directly promote those outside candidates.
+
+The training candidate pool is the minibatch gallery, while inference uses the
+full gallery. This is a batch-hard approximation and should be compared against
+the IRRA baseline. This branch does not use the previous graph-convolution or
+Transformer-memory modules.
+
+## Data
+
+The Kaggle dataset is expected to contain:
+
+```text
+benchmark/
+└── RSTPReid/
+    ├── imgs/
+    └── data_captions.json
 ```
-pytorch 1.9.0
-torchvision 0.10.0
-prettytable
-easydict
+
+Set `root_dir` to the `benchmark` directory, the parent of `RSTPReid`.
+
+## Environment
+
+Use Python 3.10. Install PyTorch and TorchVision for the CUDA version on the
+training machine, then install the remaining requirements:
+
+```bash
+conda create -n irra-hard python=3.10 -y
+conda activate irra-hard
+# Install torch and torchvision for the machine's CUDA version.
+pip install -r requirements.txt
+python scripts/prepare_tokenizer.py
 ```
 
-### Prepare Datasets
-Download the CUHK-PEDES dataset from [here](https://github.com/ShuangLI59/Person-Search-with-Natural-Language-Description), ICFG-PEDES dataset from [here](https://github.com/zifyloo/SSAN) and RSTPReid dataset form [here](https://github.com/NjtechCVLab/RSTPReid-Dataset)
+The first run also downloads the CLIP ViT-B/16 weights. On Kaggle, enable
+Internet for the BPE tokenizer and CLIP weight downloads.
 
-Organize them in `your dataset root dir` folder as follows:
-```
-|-- your dataset root dir/
-|   |-- <CUHK-PEDES>/
-|       |-- imgs
-|            |-- cam_a
-|            |-- cam_b
-|            |-- ...
-|       |-- reid_raw.json
-|
-|   |-- <ICFG-PEDES>/
-|       |-- imgs
-|            |-- test
-|            |-- train 
-|       |-- ICFG_PEDES.json
-|
-|   |-- <RSTPReid>/
-|       |-- imgs
-|       |-- data_captions.json
-```
+## Train for 10 epochs
 
+The initial configuration uses batch size 32, 8 identities per batch, and 4
+instances per identity. The projection dimension is 128 and the hard-set
+contrastive temperature is 0.07.
 
-## Training
-
-```python
+```bash
 python train.py \
---name iira \
---img_aug \
---batch_size 64 \
---MLM \
---loss_names 'sdm+mlm+id' \
---dataset_name 'CUHK-PEDES' \
---root_dir 'your dataset root dir' \
---num_epoch 60
+  --name rstp_hard_contrastive_10ep \
+  --dataset_name RSTPReid \
+  --root_dir /path/to/tbps-benchmark/benchmark \
+  --num_epoch 10 \
+  --batch_size 32 \
+  --sampler identity \
+  --num_instance 4 \
+  --num_workers 4 \
+  --img_aug \
+  --MLM \
+  --loss_names sdm+id+mlm \
+  --candidate_topk 8 \
+  --hard_projection_dim 128 \
+  --hard_temperature 0.07 \
+  --hard_score_weight 0.5
 ```
 
-## Testing
+Validation runs each epoch and reports both `t2i-base` and
+`t2i-hard-contrastive` R@1/5/10, mAP, and mINP. The best checkpoint is
+selected by the gallery-contrastive validation R@1. Run test evaluation only
+after model selection:
+
+```bash
+python test.py --config_file /path/to/run/configs.yaml --split test
+```
+
+## Run on Kaggle
+
+Attach `hoanggv/tbps-benchmark` as the notebook input. In notebook Settings,
+choose **Accelerator → GPU** and turn on **Internet**. The available GPU and
+quota depend on Kaggle account eligibility and capacity. The example below
+uses the dataset path from the supplied notebook.
+
+**Cell 1 — clone this branch and prepare dependencies:**
 
 ```python
-python test.py --config_file 'path/to/model_dir/configs.yaml'
+%cd /kaggle/working
+!git clone --depth 1 -b codex/hard-candidate-contrastive https://github.com/lqb464/irra-gallery.git
+%cd /kaggle/working/irra-gallery
+!pip install -q -r requirements.txt
+!python scripts/prepare_tokenizer.py
 ```
 
-## IRRA on Text-to-Image Person Retrieval Results
-#### CUHK-PEDES dataset
+**Cell 2 — train for 10 epochs:**
 
-|     Method      |     Backbone     |  Rank-1   |  Rank-5   |  Rank-10  |    mAP    |   mINP    |
-| :-------------: | :--------------: | :-------: | :-------: | :-------: | :-------: | :-------: |
-|     CMPM/C      |    RN50/LSTM     |   49.37   |     -     |   79.27   |     -     |     -     |
-|      DSSL       |    RN50/BERT     |   59.98   |   80.41   |   87.56   |     -     |     -     |
-|      SSAN       |    RN50/LSTM     |   61.37   |   80.15   |   86.73   |     -     |     -     |
-|   Han et al.    |  RN101/Xformer   |   64.08   |   81.73   |   88.19   |   60.08   |     -     |
-|      LGUR       | DeiT-Small/BERT  |   65.25   |   83.12   |   89.00   |     -     |     -     |
-|       IVT       |  ViT-B-16/BERT   |   65.59   |   83.11   |   89.21   |     -     |     -     |
-|      CFine      |  ViT-B-16/BERT   |   69.57   |   85.93   |   91.15   |     -     |     -     |
-|    **CLIP**     | ViT-B-16/Xformer |   68.19   |   86.47   |   91.47   |   61.12   |   44.86   |
-| **IRRA (ours)** | ViT-B-16/Xformer | **73.38** | **89.93** | **93.71** | **66.13** | **50.24** |
-
-[Model & log for CUHK-PEDES](https://drive.google.com/file/d/1OBhFhpZpltRMZ88K6ceNUv4vZgevsFCW/view?usp=share_link)
-
-#### ICFG-PEDES dataset
-
-|     Method      |  Rank-1   |  Rank-5   |  Rank-10  |    mAP    |   mINP   |
-| :-------------: | :-------: | :-------: | :-------: | :-------: | :------: |
-|     CMPM/C      |   43.51   |   65.44   |   74.26   |     -     |    -     |
-|      SSAN       |   54.23   |   72.63   |   79.53   |     -     |    -     |
-|       IVT       |   56.04   |   73.60   |   80.22   |     -     |    -     |
-|      CFine      |   60.83   |   76.55   |   82.42   |     -     |    -     |
-|    **CLIP**     |   56.74   |   75.72   |   82.26   |   31.84   |   5.03   |
-| **IRRA (ours)** | **63.46** | **80.24** | **85.82** | **38.05** | **7.92** |
-
-[Model & log for ICFG-PEDES](https://drive.google.com/file/d/1Y3D7zZsKPpuEHWJ9nVecUW-HaKdjDI9g/view?usp=share_link)
-
-#### RSTPReid dataset
-
-|     Method      |  Rank-1   |  Rank-5   |  Rank-10  |    mAP    |   mINP    |
-| :-------------: | :-------: | :-------: | :-------: | :-------: | :-------: |
-|      DSSL       |   39.05   |   62.60   |   73.95   |     -     |     -     |
-|      SSAN       |   43.50   |   67.80   |   77.15   |     -     |     -     |
-|       IVT       |   46.70   |   70.00   |   78.80   |     -     |     -     |
-|      CFine      |   50.55   |   72.50   |   81.60   |     -     |     -     |
-|    **CLIP**     |   54.05   |   80.70   |   88.00   |   43.41   |   22.31   |
-| **IRRA (ours)** | **60.20** | **81.30** | **88.20** | **47.17** | **25.28** |
-
-[Model & log for RSTPReid](https://drive.google.com/file/d/1LpUHkLErEWkJiXyWYxWwiK-8Fz1_1QGY/view?usp=share_link)
-
-
-## Acknowledgments
-Some components of this code implementation are adopted from [CLIP](https://github.com/openai/CLIP), [TextReID](https://github.com/BrandonHanx/TextReID) and [TransReID](https://github.com/damo-cv/TransReID). We sincerely appreciate for their contributions.
-
-
-## Citation
-If you find this code useful for your research, please cite our paper.
-
-```tex
-@inproceedings{cvpr23crossmodal,
-  title={Cross-Modal Implicit Relation Reasoning and Aligning for Text-to-Image Person Retrieval},
-  author={Jiang, Ding and Ye, Mang},
-  booktitle={IEEE International Conference on Computer Vision and Pattern Recognition (CVPR)},
-  year={2023},
-}
+```python
+!python train.py \
+  --name rstp_hard_contrastive_10ep \
+  --dataset_name RSTPReid \
+  --root_dir /kaggle/input/datasets/hoanggv/tbps-benchmark/benchmark \
+  --output_dir /kaggle/working/irra-hard-outputs \
+  --num_epoch 10 \
+  --batch_size 32 \
+  --sampler identity \
+  --num_instance 4 \
+  --num_workers 4 \
+  --img_aug \
+  --MLM \
+  --loss_names sdm+id+mlm \
+  --candidate_topk 8 \
+  --hard_projection_dim 128 \
+  --hard_temperature 0.07 \
+  --hard_score_weight 0.5 \
+  --val_dataset val
 ```
 
-## Contact
-If you have any question, please feel free to contact us. E-mail: [jiangding@whu.edu.cn](mailto:jiangding@whu.edu.cn), [yemang@whu.edu.cn](mailto:yemang@whu.edu.cn).
+The dataset under `/kaggle/input` is read-only. Logs and checkpoints are
+written under `/kaggle/working/irra-hard-outputs`. Save a Notebook Version to
+retain outputs after the session ends.
+
+## Ablations
+
+- Run the IRRA baseline with `--disable_gallery_context`.
+- Compare `--candidate_topk` values such as 4, 8, and 16.
+- Compare projection dimensions such as 64, 128, and 256.
+- Tune `--hard_score_weight` on validation. For example:
+
+```bash
+python test.py \
+  --config_file /path/to/run/configs.yaml \
+  --split val \
+  --hard_score_weight 0.25
+```
+
+Choose settings on validation, then evaluate the selected checkpoint on test.

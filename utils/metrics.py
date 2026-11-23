@@ -98,9 +98,9 @@ class Evaluator():
             return cmc[0]
 
         top1 = add_metrics("t2i-base", similarity, qids, gids)
-        if getattr(model, "gallery_context_enabled", False):
+        if getattr(model, "hard_candidate_enabled", False):
             gallery_scores = model.rerank_similarity(qfeats, gfeats, similarity)
-            top1 = add_metrics("t2i-gallery", gallery_scores, qids, gids)
+            top1 = add_metrics("t2i-hard-contrastive", gallery_scores, qids, gids)
 
         if i2t_metric:
             add_metrics("i2t-base", similarity.t(), gids, qids)

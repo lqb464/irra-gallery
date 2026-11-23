@@ -1,5 +1,4 @@
 import logging
-import os
 import time
 import torch
 from utils.meter import AverageMeter
@@ -15,31 +14,12 @@ def meter_scalar(value):
     return value
 
 
-def gradient_group_norm(loss, parameters):
-    """Measure a loss's gradient norm without accumulating parameter .grad values."""
-    parameters = [parameter for parameter in parameters if parameter.requires_grad]
-    if not parameters or not loss.requires_grad:
-        return 0.0
-
-    gradients = torch.autograd.grad(
-        loss,
-        parameters,
-        retain_graph=True,
-        allow_unused=True,
-    )
-    squared_norm = 0.0
-    for gradient in gradients:
-        if gradient is not None:
-            squared_norm += gradient.detach().float().pow(2).sum().item()
-    return squared_norm ** 0.5
-
-
 def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
              scheduler, checkpointer):
 
     log_period = args.log_period
     eval_period = args.eval_period
-    device = "cuda"
+    device = next(model.parameters()).device
     num_epoch = args.num_epoch
     arguments = {}
     arguments["num_epoch"] = num_epoch
@@ -48,32 +28,17 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
     logger = logging.getLogger("IRRA.train")
     logger.info('start training')
 
-    gradient_logger = logging.getLogger("IRRA.gallery_gradients")
-    if get_rank() == 0 and not gradient_logger.handlers:
-        gradient_logger.setLevel(logging.INFO)
-        gradient_handler = logging.FileHandler(
-            os.path.join(args.output_dir, "gallery_gradients.log"), mode="a"
-        )
-        gradient_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-        gradient_logger.addHandler(gradient_handler)
-        gradient_logger.propagate = False
-
     meters = {
         "loss": AverageMeter(),
         "sdm_loss": AverageMeter(),
         "itc_loss": AverageMeter(),
         "id_loss": AverageMeter(),
         "mlm_loss": AverageMeter(),
-        "gallery_rank_loss": AverageMeter(),
-        "gallery_confidence_loss": AverageMeter(),
-        "gallery_candidate_count": AverageMeter(),
-        "gallery_delta_mean": AverageMeter(),
-        "gallery_delta_std": AverageMeter(),
-        "gallery_delta_min": AverageMeter(),
-        "gallery_delta_max": AverageMeter(),
         "img_acc": AverageMeter(),
         "txt_acc": AverageMeter(),
-        "mlm_acc": AverageMeter()
+        "mlm_acc": AverageMeter(),
+        "hard_contrastive_loss": AverageMeter(),
+        "gallery_candidate_count": AverageMeter(),
     }
 
     tb_writer = SummaryWriter(log_dir=args.output_dir)
@@ -94,59 +59,23 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
             total_loss = sum([v for k, v in ret.items() if "loss" in k])
 
             batch_size = batch['images'].shape[0]
-            meters['loss'].update(meter_scalar(total_loss), batch_size)
+            meters['loss'].update(total_loss.item(), batch_size)
             meters['sdm_loss'].update(meter_scalar(ret.get('sdm_loss', 0)), batch_size)
             meters['itc_loss'].update(meter_scalar(ret.get('itc_loss', 0)), batch_size)
             meters['id_loss'].update(meter_scalar(ret.get('id_loss', 0)), batch_size)
             meters['mlm_loss'].update(meter_scalar(ret.get('mlm_loss', 0)), batch_size)
-            for key in (
-                'gallery_rank_loss', 'gallery_confidence_loss',
-                'gallery_candidate_count', 'gallery_delta_mean',
-                'gallery_delta_std', 'gallery_delta_min', 'gallery_delta_max',
-            ):
-                if key in ret:
-                    meters[key].update(meter_scalar(ret[key]), batch_size)
-
-            grad_log_period = max(1, getattr(args, "gallery_grad_log_period", log_period))
-            if (
-                get_rank() == 0
-                and "gallery_rank_loss" in ret
-                and (n_iter + 1) % grad_log_period == 0
-            ):
-                raw_model = model.module if hasattr(model, "module") else model
-                named_parameters = list(raw_model.named_parameters())
-                gallery_parameters = [
-                    parameter for name, parameter in named_parameters
-                    if name.startswith("gallery_context.")
-                ]
-                shared_parameters = [
-                    parameter for name, parameter in named_parameters
-                    if name.startswith("base_model.")
-                ]
-                base_loss = sum(
-                    value for name, value in ret.items()
-                    if "loss" in name and not name.startswith("gallery_")
-                )
-                losses_to_measure = [("base_loss", base_loss)] + [
-                    (name, ret[name])
-                    for name in ("gallery_rank_loss", "gallery_confidence_loss")
-                    if name in ret
-                ]
-                for loss_name, loss in losses_to_measure:
-                    gallery_norm = gradient_group_norm(loss, gallery_parameters)
-                    shared_norm = gradient_group_norm(loss, shared_parameters)
-                    gradient_logger.info(
-                        "epoch=%d iteration=%d loss=%s value=%.8g "
-                        "gallery_grad_norm=%.8g shared_encoder_grad_norm=%.8g",
-                        epoch, n_iter + 1, loss_name, meter_scalar(loss),
-                        gallery_norm, shared_norm,
-                    )
+            meters['hard_contrastive_loss'].update(
+                meter_scalar(ret.get('hard_contrastive_loss', 0)), batch_size
+            )
+            meters['gallery_candidate_count'].update(
+                meter_scalar(ret.get('gallery_candidate_count', 0)), batch_size
+            )
 
             meters['img_acc'].update(meter_scalar(ret.get('img_acc', 0)), batch_size)
             meters['txt_acc'].update(meter_scalar(ret.get('txt_acc', 0)), batch_size)
             meters['mlm_acc'].update(meter_scalar(ret.get('mlm_acc', 0)), 1)
 
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             total_loss.backward()
             optimizer.step()
             synchronize()
@@ -155,7 +84,7 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
                 info_str = f"Epoch[{epoch}] Iteration[{n_iter + 1}/{len(train_loader)}]"
                 # log loss and acc info
                 for k, v in meters.items():
-                    if v.count > 0 and (v.avg > 0 or k.startswith("gallery_delta_")):
+                    if v.avg > 0:
                         info_str += f", {k}: {v.avg:.4f}"
                 info_str += f", Base Lr: {scheduler.get_lr()[0]:.2e}"
                 logger.info(info_str)
@@ -163,7 +92,7 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
         tb_writer.add_scalar('lr', scheduler.get_lr()[0], epoch)
         tb_writer.add_scalar('temperature', meter_scalar(ret['temperature']), epoch)
         for k, v in meters.items():
-            if v.count > 0 and (v.avg > 0 or k.startswith("gallery_delta_")):
+            if v.avg > 0:
                 tb_writer.add_scalar(k, v.avg, epoch)
 
 
@@ -183,7 +112,8 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
                 else:
                     top1 = evaluator.eval(model.eval())
 
-                torch.cuda.empty_cache()
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
                 if best_top1 < top1:
                     best_top1 = top1
                     arguments["epoch"] = epoch
@@ -199,3 +129,4 @@ def do_inference(model, test_img_loader, test_txt_loader):
 
     evaluator = Evaluator(test_img_loader, test_txt_loader)
     top1 = evaluator.eval(model.eval())
+
