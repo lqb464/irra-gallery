@@ -1,6 +1,5 @@
 import logging
 import torch
-from prettytable import PrettyTable
 from utils.meter import AverageMeter
 from utils.metrics import Evaluator
 from utils.comm import get_rank, synchronize
@@ -78,10 +77,10 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
             if get_rank() == 0:
                 if args.distributed:
                     epoch_metrics = evaluator.eval(
-                        model.module.eval(), log=False, return_metrics=True)
+                        model.module.eval(), log=True, return_metrics=True)
                 else:
                     epoch_metrics = evaluator.eval(
-                        model.eval(), log=False, return_metrics=True)
+                        model.eval(), log=True, return_metrics=True)
                 top1 = epoch_metrics['text_to_image_r1']
 
                 torch.cuda.empty_cache()
@@ -92,35 +91,10 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
 
         if get_rank() == 0:
             parts = [f"Epoch {epoch}/{num_epoch}"]
-            for key in ("loss", "sdm_loss", "itc_loss", "id_loss", "mlm_loss",
-                        "img_acc", "txt_acc", "mlm_acc"):
-                if meters[key].count:
-                    parts.append(f"{key}={meters[key].avg:.4f}")
-            if epoch_metrics is not None:
-                metric_table = PrettyTable(["task", "R1", "R5", "R10", "mAP", "mINP"])
-                for column in ("R1", "R5", "R10", "mAP", "mINP"):
-                    metric_table.custom_format[column] = lambda field, value: f"{value:.3f}"
-                metric_table.add_row([
-                    "t2i-base",
-                    epoch_metrics["base_text_to_image_r1"],
-                    epoch_metrics.get("base_text_to_image_r5", epoch_metrics["text_to_image_r5"]),
-                    epoch_metrics.get("base_text_to_image_r10", epoch_metrics["text_to_image_r10"]),
-                    epoch_metrics.get("base_text_to_image_mAP", epoch_metrics["text_to_image_mAP"]),
-                    epoch_metrics.get("base_text_to_image_mINP", epoch_metrics["text_to_image_mINP"]),
-                ])
-                if getattr(model.module if args.distributed else model,
-                           "gallery_context_enabled", False):
-                    metric_table.add_row([
-                        "t2i-hard-contrastive",
-                        epoch_metrics["text_to_image_r1"],
-                        epoch_metrics["text_to_image_r5"],
-                        epoch_metrics["text_to_image_r10"],
-                        epoch_metrics["text_to_image_mAP"],
-                        epoch_metrics["text_to_image_mINP"],
-                    ])
-                logger.info(" | ".join(parts) + "\n" + str(metric_table))
-            else:
-                logger.info(" | ".join(parts))
+            for key, meter in meters.items():
+                if meter.count and (meter.avg > 0 or key.startswith("gallery_delta_")):
+                    parts.append(f"{key}={meter.avg:.4f}")
+            logger.info(" | ".join(parts))
 
 
 def do_inference(model, test_img_loader, test_txt_loader):

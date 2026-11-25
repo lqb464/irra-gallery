@@ -51,13 +51,19 @@ if __name__ == '__main__':
     cur_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     args.output_dir = op.join(args.output_dir, args.dataset_name, f'{cur_time}_{name}')
     logger = setup_logger('IRRA', save_dir=args.output_dir, if_train=args.training, distributed_rank=get_rank())
-    class EpochOnlyFilter(logging.Filter):
+
+    class EpochConsoleFilter(logging.Filter):
         def filter(self, record):
-            return record.name == 'IRRA.train' and record.getMessage().startswith('Epoch ')
+            message = record.getMessage()
+            if record.name == "IRRA.train":
+                return message.startswith("Epoch ")
+            if record.name == "IRRA.eval":
+                return "task" in message and "R1" in message and "mAP" in message
+            return False
 
     for handler in logger.handlers:
         if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
-            handler.addFilter(EpochOnlyFilter())
+            handler.addFilter(EpochConsoleFilter())
     save_train_configs(args.output_dir, args)
 
     # get image-text pair datasets dataloader
