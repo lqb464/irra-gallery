@@ -6,7 +6,6 @@ from .lr_scheduler import LRSchedulerWithWarmup
 def build_optimizer(args, model):
     params = []
 
-    print(f'Using {args.lr_factor} times learning rate for random init module ')
     
     for key, value in model.named_parameters():
         if not value.requires_grad:
