@@ -5,7 +5,6 @@ from utils.meter import AverageMeter
 from utils.metrics import Evaluator
 from utils.comm import get_rank, synchronize
 from torch.utils.tensorboard import SummaryWriter
-from prettytable import PrettyTable
 
 
 def meter_scalar(value):
@@ -17,7 +16,6 @@ def meter_scalar(value):
 def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
              scheduler, checkpointer):
 
-    log_period = args.log_period
     eval_period = args.eval_period
     device = next(model.parameters()).device
     num_epoch = args.num_epoch
@@ -26,7 +24,6 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
     arguments["iteration"] = 0
 
     logger = logging.getLogger("IRRA.train")
-    logger.info('start training')
 
     meters = {
         "loss": AverageMeter(),
@@ -47,7 +44,6 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
 
     # train
     for epoch in range(start_epoch, num_epoch + 1):
-        start_time = time.time()
         for meter in meters.values():
             meter.reset()
         model.train()
@@ -80,15 +76,6 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
             optimizer.step()
             synchronize()
 
-            if (n_iter + 1) % log_period == 0:
-                info_str = f"Epoch[{epoch}] Iteration[{n_iter + 1}/{len(train_loader)}]"
-                # log loss and acc info
-                for k, v in meters.items():
-                    if v.avg > 0:
-                        info_str += f", {k}: {v.avg:.4f}"
-                info_str += f", Base Lr: {scheduler.get_lr()[0]:.2e}"
-                logger.info(info_str)
-        
         tb_writer.add_scalar('lr', scheduler.get_lr()[0], epoch)
         tb_writer.add_scalar('temperature', meter_scalar(ret['temperature']), epoch)
         for k, v in meters.items():
@@ -97,16 +84,8 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
 
 
         scheduler.step()
-        if get_rank() == 0:
-            end_time = time.time()
-            time_per_batch = (end_time - start_time) / (n_iter + 1)
-            logger.info(
-                "Epoch {} done. Time per batch: {:.3f}[s] Speed: {:.1f}[samples/s]"
-                .format(epoch, time_per_batch,
-                        train_loader.batch_size / time_per_batch))
         if epoch >= args.eval_after_epoch and epoch % eval_period == 0:
             if get_rank() == 0:
-                logger.info("Validation Results - Epoch: {}".format(epoch))
                 if args.distributed:
                     top1 = evaluator.eval(model.module.eval())
                 else:
@@ -118,8 +97,13 @@ def do_train(start_epoch, args, model, train_loader, evaluator, optimizer,
                     best_top1 = top1
                     arguments["epoch"] = epoch
                     checkpointer.save("best", **arguments)
-    if get_rank() == 0:
-        logger.info(f"best R1: {best_top1} at epoch {arguments.get('epoch', 'N/A')}")
+
+        if get_rank() == 0:
+            parts = [f"Epoch {epoch}/{num_epoch}"]
+            for key, meter in meters.items():
+                if meter.count and (meter.avg > 0 or key.startswith("gallery_delta_")):
+                    parts.append(f"{key}={meter.avg:.4f}")
+            logger.info(" | ".join(parts))
 
 
 def do_inference(model, test_img_loader, test_txt_loader):

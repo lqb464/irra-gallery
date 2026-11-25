@@ -73,7 +73,6 @@ class IRRA(nn.Module):
     def _set_task(self):
         loss_names = self.args.loss_names
         self.current_task = [l.strip() for l in loss_names.split('+')]
-        print(f'Training Model with {self.current_task} tasks')
     
     
     def cross_former(self, q, k, v):
