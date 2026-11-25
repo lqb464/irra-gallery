@@ -133,3 +133,12 @@ If you find this code useful for your research, please cite our paper.
 
 ## Contact
 If you have any question, please feel free to contact us. E-mail: [jiangding@whu.edu.cn](mailto:jiangding@whu.edu.cn), [yemang@whu.edu.cn](mailto:yemang@whu.edu.cn).
+
+
+## Gallery Context experiment
+
+This branch adds an optional permutation-equivariant Gallery Context Transformer on top of the original IRRA CLIP ViT-B/16 baseline. The base image CLS embeddings are preserved for comparison; contextualized CLS′ embeddings are evaluated against the same caption EOS features. With `--gallery_context`, validation/test reports `t2i-base` and `t2i-hard-contrastive` rows in the same metric table.
+
+Training uses the original IRRA `sdm+id+mlm` objectives: SDM and ID use the contextualized image embedding, while MLM keeps IRRA's token-level cross-modal path. The Gallery Context module is initialized from scratch in FP32; CLIP keeps its pretrained weights.
+
+Use `notebooks/gallery_context_rstpreid.ipynb` for the 10-epoch RSTPReid run. It clones this branch, uses `--seed 17`, and prints a loss summary and both validation metric rows after each epoch. The test cell reports both rows for the selected checkpoint.

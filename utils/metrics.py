@@ -70,21 +70,37 @@ class Evaluator():
         gids = torch.cat(gids, 0)
         gfeats = torch.cat(gfeats, 0)
 
-        return qfeats, gfeats, qids, gids
-    
-    def eval(self, model, i2t_metric=False):
+        # Keep raw CLIP features for the base row; Gallery Context attends over
+        # the complete image set and returns one contextualized feature per image.
+        base_gfeats, base_gids = gfeats, gids
+        if getattr(model, 'gallery_context_enabled', False):
+            with torch.no_grad():
+                gfeats = model.encode_gallery(base_gfeats)
 
-        qfeats, gfeats, qids, gids = self._compute_embedding(model)
+        return qfeats, gfeats, qids, gids, base_gfeats, base_gids
 
-        qfeats = F.normalize(qfeats, p=2, dim=1) # text features
-        gfeats = F.normalize(gfeats, p=2, dim=1) # image features
+    def eval(self, model, i2t_metric=False, log=True, return_metrics=False):
+        model = model.eval()
+        qfeats, gfeats, qids, gids, base_gfeats, base_gids = self._compute_embedding(model)
 
-        similarity = qfeats @ gfeats.t()
+        qfeats = F.normalize(qfeats.float(), p=2, dim=1) # text features
+        gfeats = F.normalize(gfeats.float(), p=2, dim=1) # image features
+        base_gfeats = F.normalize(base_gfeats.float(), p=2, dim=1)
 
-        t2i_cmc, t2i_mAP, t2i_mINP, _ = rank(similarity=similarity, q_pids=qids, g_pids=gids, max_rank=10, get_mAP=True)
-        t2i_cmc, t2i_mAP, t2i_mINP = t2i_cmc.numpy(), t2i_mAP.numpy(), t2i_mINP.numpy()
+        def retrieval_metrics(gallery_features, gallery_ids):
+            similarity = qfeats @ gallery_features.t()
+            cmc, mean_ap, mean_inp, _ = rank(
+                similarity=similarity, q_pids=qids, g_pids=gallery_ids,
+                max_rank=10, get_mAP=True)
+            return cmc.cpu().numpy(), float(mean_ap.cpu()), float(mean_inp.cpu()), similarity
+
+        base_cmc, base_map, base_minp, base_similarity = retrieval_metrics(
+            base_gfeats, base_gids)
+        t2i_cmc, t2i_mAP, t2i_mINP, similarity = retrieval_metrics(gfeats, gids)
         table = PrettyTable(["task", "R1", "R5", "R10", "mAP", "mINP"])
-        table.add_row(['t2i', t2i_cmc[0], t2i_cmc[4], t2i_cmc[9], t2i_mAP, t2i_mINP])
+        table.add_row(['t2i-base', *base_cmc[[0, 4, 9]], base_map, base_minp])
+        if getattr(model, 'gallery_context_enabled', False):
+            table.add_row(['t2i-hard-contrastive', *t2i_cmc[[0, 4, 9]], t2i_mAP, t2i_mINP])
 
         if i2t_metric:
             i2t_cmc, i2t_mAP, i2t_mINP, _ = rank(similarity=similarity.t(), q_pids=gids, g_pids=qids, max_rank=10, get_mAP=True)
@@ -96,6 +112,21 @@ class Evaluator():
         table.custom_format["R10"] = lambda f, v: f"{v:.3f}"
         table.custom_format["mAP"] = lambda f, v: f"{v:.3f}"
         table.custom_format["mINP"] = lambda f, v: f"{v:.3f}"
-        self.logger.info('\n' + str(table))
-        
-        return t2i_cmc[0]
+        if log:
+            self.logger.info('\n' + str(table))
+
+        metrics = {
+            'text_to_image_r1': float(t2i_cmc[0]),
+            'text_to_image_r5': float(t2i_cmc[4]),
+            'text_to_image_r10': float(t2i_cmc[9]),
+            'text_to_image_mAP': float(t2i_mAP),
+            'text_to_image_mINP': float(t2i_mINP),
+            'base_text_to_image_r1': float(base_cmc[0]),
+            'base_text_to_image_r5': float(base_cmc[4]),
+            'base_text_to_image_r10': float(base_cmc[9]),
+            'base_text_to_image_mAP': base_map,
+            'base_text_to_image_mINP': base_minp,
+        }
+        if return_metrics:
+            return metrics
+        return metrics['text_to_image_r1']

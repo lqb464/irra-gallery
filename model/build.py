@@ -1,5 +1,6 @@
 from model import objectives
 from .clip_model import Transformer, QuickGELU, LayerNorm, build_CLIP_from_openai_pretrained, convert_weights
+from .gallery_context import GalleryContext
 import numpy as np
 import torch
 import torch.nn as nn
@@ -15,6 +16,15 @@ class IRRA(nn.Module):
 
         self.base_model, base_cfg = build_CLIP_from_openai_pretrained(args.pretrain_choice, args.img_size, args.stride_size)
         self.embed_dim = base_cfg['embed_dim']
+
+        self.gallery_context_enabled = getattr(args, 'gallery_context', False)
+        if self.gallery_context_enabled:
+            self.gallery_context = GalleryContext(
+                self.embed_dim,
+                depth=getattr(args, 'gallery_context_depth', 2),
+                heads=getattr(args, 'gallery_context_heads', 8),
+                dropout=getattr(args, 'gallery_context_dropout', 0.1),
+            )
 
         self.logit_scale = torch.ones([]) * (1 / args.temperature) 
 
@@ -62,7 +72,6 @@ class IRRA(nn.Module):
     def _set_task(self):
         loss_names = self.args.loss_names
         self.current_task = [l.strip() for l in loss_names.split('+')]
-        print(f'Training Model with {self.current_task} tasks')
     
     
     def cross_former(self, q, k, v):
@@ -87,6 +96,12 @@ class IRRA(nn.Module):
         x = self.base_model.encode_text(text)
         return x[torch.arange(x.shape[0]), text.argmax(dim=-1)].float()
 
+    def encode_gallery(self, image_features):
+        """Contextualize a complete gallery as one set, in float32."""
+        if not self.gallery_context_enabled:
+            return image_features
+        return self.gallery_context(image_features.unsqueeze(0)).squeeze(0)
+
     def forward(self, batch):
         ret = dict()
 
@@ -94,6 +109,8 @@ class IRRA(nn.Module):
         caption_ids = batch['caption_ids']
         image_feats, text_feats = self.base_model(images, caption_ids)
         i_feats = image_feats[:, 0, :].float()
+        if self.gallery_context_enabled:
+            i_feats = self.encode_gallery(i_feats)
         # i_feats = image_feats.float() # for CLIP ResNet visual model
         t_feats = text_feats[torch.arange(text_feats.shape[0]), caption_ids.argmax(dim=-1)].float()
 
@@ -148,4 +165,8 @@ def build_model(args, num_classes=11003):
     model = IRRA(args, num_classes)
     # covert model to fp16
     convert_weights(model)
+    # Keep the newly initialized Gallery Context module in fp32. CLIP and
+    # IRRA's original heads retain the upstream half precision conversion.
+    if model.gallery_context_enabled:
+        model.gallery_context.float()
     return model

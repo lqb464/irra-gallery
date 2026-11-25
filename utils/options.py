@@ -5,12 +5,13 @@ def get_args():
     parser = argparse.ArgumentParser(description="IRRA Args")
     ######################## general settings ########################
     parser.add_argument("--local_rank", default=0, type=int)
+    parser.add_argument("--seed", default=1, type=int)
     parser.add_argument("--name", default="baseline", help="experiment name to save")
     parser.add_argument("--output_dir", default="logs")
     parser.add_argument("--log_period", default=100)
     parser.add_argument("--eval_period", default=1, type=int)
     parser.add_argument("--eval-after-epoch", type=int, default=0)
-    parser.add_argument("--val_dataset", default="test") # use val set when evaluate, if test use test set
+    parser.add_argument("--val_dataset", default="val") # use val set when evaluate, if test use test set
     parser.add_argument("--resume", default=False, action='store_true')
     parser.add_argument("--resume_ckpt_file", default="", help='resume from ...')
 
@@ -25,6 +26,11 @@ def get_args():
     parser.add_argument("--masked_token_unchanged_rate", type=float, default=0.1, help="masked token unchanged rate")
     parser.add_argument("--lr_factor", type=float, default=5.0, help="lr factor for random init self implement module")
     parser.add_argument("--MLM", default=False, action='store_true', help="whether to use Mask Language Modeling dataset")
+    parser.add_argument("--gallery_context", default=False, action='store_true',
+                        help="apply self-attention over each training batch/full evaluation gallery")
+    parser.add_argument("--gallery_context_depth", type=int, default=2)
+    parser.add_argument("--gallery_context_heads", type=int, default=8)
+    parser.add_argument("--gallery_context_dropout", type=float, default=0.1)
 
     ######################## loss settings ########################
     parser.add_argument("--loss_names", default='sdm+id+mlm', help="which loss to use ['mlm', 'cmpm', 'id', 'itc', 'sdm']")

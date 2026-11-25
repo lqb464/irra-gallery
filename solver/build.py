@@ -6,20 +6,20 @@ from .lr_scheduler import LRSchedulerWithWarmup
 def build_optimizer(args, model):
     params = []
 
-    print(f'Using {args.lr_factor} times learning rate for random init module ')
-    
     for key, value in model.named_parameters():
         if not value.requires_grad:
             continue
         lr = args.lr
         weight_decay = args.weight_decay
 
-        if "cross" in key:
+        if "cross" in key or "gallery_context" in key:
             # use large learning rate for random initialized cross modal module
             lr =  args.lr * args.lr_factor # default 5.0
         if "bias" in key:
             lr = args.lr * args.bias_lr_factor
             weight_decay = args.weight_decay_bias
+            if "gallery_context" in key:
+                lr *= args.lr_factor
         if "classifier" in key or "mlm_head" in key:
             lr = args.lr * args.lr_factor
         

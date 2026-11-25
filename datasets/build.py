@@ -124,7 +124,8 @@ def build_dataloader(args, tranforms=None):
         else:
             logger.error('unsupported sampler! expected softmax or triplet but got {}'.format(args.sampler))
 
-        # use test set as validate set
+        # Use the held-out validation split by default. Test is reserved for
+        # the final report and should not select checkpoints.
         ds = dataset.val if args.val_dataset == 'val' else dataset.test
         val_img_set = ImageDataset(ds['image_pids'], ds['img_paths'],
                                    val_transforms)
