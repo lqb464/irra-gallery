@@ -16,7 +16,7 @@ class GalleryContext(nn.Module):
     def __init__(
         self,
         embed_dim: int,
-        candidate_topk: int = 8,
+        candidate_topk: int = 10,
         neighbor_k: int = 4,
         graph_topk: int = 4,
         memory_layers: int = 1,
@@ -24,6 +24,11 @@ class GalleryContext(nn.Module):
         margin: float = 0.2,
         focal_gamma: float = 2.0,
         focal_alpha: float = 0.25,
+        use_memory_encoder: bool = True,
+        use_pair_projection: bool = True,
+        use_confidence_loss: bool = True,
+        use_graph_context: bool = True,
+        use_edge_gate: bool = True,
     ) -> None:
         super().__init__()
         if candidate_topk < 1 or neighbor_k < 0 or graph_topk < 0 or memory_layers < 1:
@@ -42,6 +47,11 @@ class GalleryContext(nn.Module):
         self.margin = margin
         self.focal_gamma = focal_gamma
         self.focal_alpha = focal_alpha
+        self.use_memory_encoder = use_memory_encoder
+        self.use_pair_projection = use_pair_projection
+        self.use_confidence_loss = use_confidence_loss
+        self.use_graph_context = use_graph_context
+        self.use_edge_gate = use_edge_gate
 
         layer = nn.TransformerEncoderLayer(
             d_model=embed_dim,
@@ -89,51 +99,63 @@ class GalleryContext(nn.Module):
         candidates = candidates.to(dtype=dtype)
         count = candidates.shape[0]
 
-        sequence = torch.cat([query.unsqueeze(1), candidates.unsqueeze(0)], dim=1)
-        contextual = self.memory_encoder(sequence).squeeze(0)
-        query_context = contextual[0].expand(count, -1)
-        candidate_context = contextual[1:]
+        if self.use_memory_encoder:
+            sequence = torch.cat([query.unsqueeze(1), candidates.unsqueeze(0)], dim=1)
+            contextual = self.memory_encoder(sequence).squeeze(0)
+            query_context = contextual[0].expand(count, -1)
+            candidate_context = contextual[1:]
+        else:
+            query_context = query.expand(count, -1)
+            candidate_context = candidates
 
-        query_rows = query.expand(count, -1)
-        pair = self.pair_projection(
-            torch.cat(
-                [
-                    query_rows,
-                    candidates,
-                    torch.abs(query_rows - candidates),
-                    query_rows * candidates,
-                ],
-                dim=-1,
+        if self.use_pair_projection:
+            query_rows = query.expand(count, -1)
+            pair = self.pair_projection(
+                torch.cat(
+                    [
+                        query_rows,
+                        candidates,
+                        torch.abs(query_rows - candidates),
+                        query_rows * candidates,
+                    ],
+                    dim=-1,
+                )
             )
-        )
-        nodes = pair + candidate_context
+            nodes = pair + candidate_context
+        else:
+            nodes = candidate_context
+
         match_logits = self.match_predictor(
             torch.cat([query_context, nodes], dim=-1)
         ).squeeze(-1).float()
         confidence = torch.sigmoid(match_logits)
 
-        visual_similarity = self._normalize(candidates) @ self._normalize(candidates).t()
-        if count == 1:
-            adjacency = torch.ones_like(visual_similarity)
-        else:
-            neighbor_count = min(self.graph_topk + 1, count)
-            nearest = visual_similarity.detach().topk(neighbor_count, dim=-1).indices
-            edge_mask = torch.zeros_like(visual_similarity, dtype=torch.bool)
-            edge_mask.scatter_(1, nearest, True)
-            edge_mask = edge_mask | edge_mask.t()
-            edge_weights = visual_similarity.clamp_min(0.0) * edge_mask.float()
-            adjacency = edge_weights + torch.eye(
-                count, dtype=edge_weights.dtype, device=edge_weights.device
+        if self.use_graph_context:
+            visual_similarity = self._normalize(candidates) @ self._normalize(candidates).t()
+            if count == 1:
+                adjacency = torch.ones_like(visual_similarity)
+            else:
+                neighbor_count = min(self.graph_topk + 1, count)
+                nearest = visual_similarity.detach().topk(neighbor_count, dim=-1).indices
+                edge_mask = torch.zeros_like(visual_similarity, dtype=torch.bool)
+                edge_mask.scatter_(1, nearest, True)
+                edge_mask = edge_mask | edge_mask.t()
+                edge_weights = visual_similarity.clamp_min(0.0) * edge_mask.float()
+                adjacency = edge_weights + torch.eye(
+                    count, dtype=edge_weights.dtype, device=edge_weights.device
+                )
+
+            if self.use_edge_gate:
+                node_confidence = 0.1 + 0.9 * confidence
+                edge_gate = torch.sqrt(node_confidence[:, None] * node_confidence[None, :])
+                adjacency = adjacency * edge_gate
+
+            adjacency = adjacency / adjacency.sum(dim=-1, keepdim=True).clamp_min(1e-6)
+            graph_context = self.graph_projection(
+                adjacency.to(dtype=dtype) @ nodes
             )
-
-        node_confidence = 0.1 + 0.9 * confidence
-        edge_gate = torch.sqrt(node_confidence[:, None] * node_confidence[None, :])
-        adjacency = adjacency * edge_gate
-        adjacency = adjacency / adjacency.sum(dim=-1, keepdim=True).clamp_min(1e-6)
-
-        graph_context = self.graph_projection(
-            adjacency.to(dtype=dtype) @ nodes
-        )
+        else:
+            graph_context = torch.zeros_like(nodes)
         score_input = torch.cat(
             [
                 query_context,
@@ -226,14 +248,17 @@ class GalleryContext(nn.Module):
             else:
                 ranking_losses.append(adjusted_scores.sum() * 0.0)
 
-            confidence_losses.append(
-                self._focal_loss(
-                    match_logits,
-                    targets,
-                    gamma=self.focal_gamma,
-                    alpha=self.focal_alpha,
+            if self.use_confidence_loss:
+                confidence_losses.append(
+                    self._focal_loss(
+                        match_logits,
+                        targets,
+                        gamma=self.focal_gamma,
+                        alpha=self.focal_alpha,
+                    )
                 )
-            )
+            else:
+                confidence_losses.append(adjusted_scores.sum() * 0.0)
             candidate_counts.append(torch.tensor(float(candidate_ids.numel()), device=pids.device))
 
         all_deltas = torch.cat(delta_values)

@@ -24,13 +24,18 @@ class IRRA(nn.Module):
             self.gallery_context = GalleryContext(
                 embed_dim=self.embed_dim,
                 candidate_topk=args.candidate_topk,
-                neighbor_k=args.neighbor_k,
+                neighbor_k=0 if getattr(args, 'disable_neighbor_expansion', False) else args.neighbor_k,
                 graph_topk=args.graph_topk,
                 memory_layers=args.memory_layers,
                 score_adjustment_weight=args.score_adjustment_weight,
                 margin=args.gallery_margin,
                 focal_gamma=args.focal_gamma,
                 focal_alpha=args.focal_alpha,
+                use_memory_encoder=not getattr(args, 'disable_memory_encoder', False),
+                use_pair_projection=not getattr(args, 'disable_pair_projection', False),
+                use_confidence_loss=not getattr(args, 'disable_confidence_loss', False),
+                use_graph_context=not getattr(args, 'disable_graph_context', False),
+                use_edge_gate=not getattr(args, 'disable_edge_gate', False),
             )
 
         if 'id' in args.loss_names:
@@ -195,4 +200,8 @@ def build_model(args, num_classes=11003):
     convert_weights(model)
     if model.gallery_context_enabled:
         model.gallery_context.float()
+    if getattr(args, 'freeze_irra', False):
+        for name, param in model.named_parameters():
+            if not name.startswith('gallery_context.'):
+                param.requires_grad = False
     return model

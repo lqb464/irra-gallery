@@ -84,5 +84,7 @@ if __name__ == '__main__':
     if args.resume:
         checkpoint = checkpointer.resume(args.resume_ckpt_file)
         start_epoch = checkpoint['epoch']
+    elif getattr(args, 'pretrained_ckpt', ''):
+        checkpointer.load(args.pretrained_ckpt)
 
     do_train(start_epoch, args, model, train_loader, evaluator, optimizer, scheduler, checkpointer)

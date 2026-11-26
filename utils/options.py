@@ -13,6 +13,7 @@ def get_args():
     parser.add_argument("--val_dataset", default="test") # use val set when evaluate, if test use test set
     parser.add_argument("--resume", default=False, action='store_true')
     parser.add_argument("--resume_ckpt_file", default="", help='resume from ...')
+    parser.add_argument("--pretrained_ckpt", default="", help='load model weights only without optimizer/scheduler/epoch')
 
     ######################## model general settings ########################
     parser.add_argument("--pretrain_choice", default='ViT-B/16') # whether use pretrained model
@@ -27,9 +28,23 @@ def get_args():
     parser.add_argument("--MLM", default=False, action='store_true', help="whether to use Mask Language Modeling dataset")
 
     ######################## gallery-context experiment ########################
+    parser.add_argument("--freeze_irra", action="store_true",
+                        help="freeze all original IRRA parameters and only train gallery_context")
     parser.add_argument("--disable_gallery_context", action="store_true",
                         help="disable the added gallery-context branch and its losses")
-    parser.add_argument("--candidate_topk", type=int, default=8)
+    parser.add_argument("--disable_neighbor_expansion", action="store_true",
+                        help="disable image-neighbor expansion when building candidate sets")
+    parser.add_argument("--disable_memory_encoder", action="store_true",
+                        help="disable the query-conditioned Transformer memory encoder")
+    parser.add_argument("--disable_pair_projection", action="store_true",
+                        help="disable pairwise query-candidate feature projection")
+    parser.add_argument("--disable_confidence_loss", action="store_true",
+                        help="disable match_predictor focal loss supervision")
+    parser.add_argument("--disable_graph_context", action="store_true",
+                        help="disable k-NN graph convolution over candidates")
+    parser.add_argument("--disable_edge_gate", action="store_true",
+                        help="disable confidence-based edge gating in the candidate graph")
+    parser.add_argument("--candidate_topk", type=int, default=10)
     parser.add_argument("--neighbor_k", type=int, default=4)
     parser.add_argument("--graph_topk", type=int, default=4)
     parser.add_argument("--memory_layers", type=int, default=1)
